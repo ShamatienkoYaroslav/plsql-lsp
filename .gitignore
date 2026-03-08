@@ -1,0 +1,12 @@
+node_modules/
+dist/
+
+# ANTLR generated files
+src/grammar/PlSqlLexer.ts
+src/grammar/PlSqlLexer.interp
+src/grammar/PlSqlLexer.tokens
+src/grammar/PlSqlParser.ts
+src/grammar/PlSqlParser.interp
+src/grammar/PlSqlParser.tokens
+src/grammar/PlSqlParserListener.ts
+src/grammar/PlSqlParserVisitor.ts

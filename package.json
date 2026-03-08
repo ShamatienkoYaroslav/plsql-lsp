@@ -1,0 +1,22 @@
+{
+  "name": "plsql-lsp",
+  "version": "0.1.0",
+  "description": "Language server for Oracle PL/SQL and SQL",
+  "main": "dist/server.js",
+  "scripts": {
+    "antlr": "antlr4ng -Dlanguage=TypeScript -visitor src/grammar/PlSqlLexer.g4 src/grammar/PlSqlParser.g4 && node scripts/fix-antlr-imports.js",
+    "build": "npm run antlr && tsc -p .",
+    "watch": "tsc -p . --watch",
+    "start": "node dist/server.js --stdio"
+  },
+  "dependencies": {
+    "antlr4ng": "^3.0.16",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "antlr4ng-cli": "^2.0.0",
+    "typescript": "^5.4.0"
+  }
+}
