@@ -1,7 +1,9 @@
 import { Token, TokenType } from "./tokens.js";
 import { SyntaxNode, makeNode } from "./ast.js";
+import { DiagnosticSeverity } from "vscode-languageserver/node";
 import { Parser } from "./parser.js";
 import { parseExpression, parseExpressionList } from "./expressions.js";
+import { parseSelect } from "./dml.js";
 
 // ─── Anonymous Block ───────────────────────────────────────────────────────
 
@@ -34,6 +36,9 @@ function parseBlock(p: Parser): SyntaxNode {
     children.push(parseExceptionSection(p));
   }
 
+  if (p.isAtEnd()) {
+    p.addDiagnostic(start, "Unclosed BEGIN block \u2014 expected END");
+  }
   children.push(p.expect(TokenType.END));
 
   // Optional name after END
@@ -62,6 +67,24 @@ function parseStatementList(p: Parser): SyntaxNode {
       // Consume trailing semicolons
       if (p.check(TokenType.Semicolon)) {
         stmts.push(p.advance());
+      } else if (!p.isAtEnd() && !p.check(TokenType.END) && !p.check(TokenType.EXCEPTION) &&
+                 !p.check(TokenType.WHEN) && !p.check(TokenType.ELSIF) && !p.check(TokenType.ELSE)) {
+        // Next token looks like the start of a new statement — warn about missing semicolon
+        const next = p.peek().type;
+        if (next === TokenType.IF || next === TokenType.LOOP || next === TokenType.FOR ||
+            next === TokenType.WHILE || next === TokenType.NULL_ || next === TokenType.RETURN ||
+            next === TokenType.EXIT || next === TokenType.CONTINUE || next === TokenType.GOTO ||
+            next === TokenType.RAISE || next === TokenType.BEGIN || next === TokenType.DECLARE ||
+            next === TokenType.OPEN || next === TokenType.FETCH || next === TokenType.CLOSE ||
+            next === TokenType.EXECUTE || next === TokenType.PIPE || next === TokenType.FORALL ||
+            next === TokenType.SELECT || next === TokenType.INSERT || next === TokenType.UPDATE ||
+            next === TokenType.DELETE || next === TokenType.MERGE || next === TokenType.COMMIT ||
+            next === TokenType.ROLLBACK || next === TokenType.SAVEPOINT || next === TokenType.CASE ||
+            next === TokenType.PRAGMA) {
+          // Use the previous token position for the diagnostic
+          const prevTok = p.pos > 0 ? p.tokens[p.pos - 1] : p.peek();
+          p.addDiagnostic(prevTok, "Missing semicolon after statement", DiagnosticSeverity.Warning);
+        }
       }
     } catch {
       const errTok = p.peek();
@@ -105,6 +128,9 @@ function parsePlSqlStatement(p: Parser): SyntaxNode | null {
     case TokenType.DECLARE:
       return parseAnonymousBlock(p);
     case TokenType.PRAGMA: return parsePragma(p);
+    case TokenType.DOLLAR_IF:
+    case TokenType.DOLLAR_ERROR:
+      return parseConditionalCompilation(p);
 
     // DML statements
     case TokenType.SELECT:
@@ -166,6 +192,9 @@ function parseDeclaration(p: Parser): SyntaxNode | null {
     case TokenType.RESTRICT_REFERENCES:
       // These are pragma names — shouldn't appear here, but handle gracefully
       return parsePragma(p);
+    case TokenType.DOLLAR_IF:
+    case TokenType.DOLLAR_ERROR:
+      return parseConditionalCompilation(p);
 
     default:
       // Variable/constant declaration: name [CONSTANT] type [:= expr]
@@ -230,7 +259,6 @@ function parseCursorDecl(p: Parser): SyntaxNode {
   // IS SELECT ...
   if (p.match(TokenType.IS)) {
     children.push(p.tokens[p.pos - 1]);
-    const { parseSelect } = require("./dml.js");
     children.push(parseSelect(p));
   }
 
@@ -448,6 +476,9 @@ function parseIf(p: Parser): SyntaxNode {
     children.push(parseStatementList(p));
   }
 
+  if (p.isAtEnd()) {
+    p.addDiagnostic(start, "Unclosed IF statement \u2014 expected END IF");
+  }
   children.push(p.expect(TokenType.END));
   children.push(p.expect(TokenType.IF));
 
@@ -475,6 +506,9 @@ function parseCaseStatement(p: Parser): SyntaxNode {
     children.push(parseStatementList(p));
   }
 
+  if (p.isAtEnd()) {
+    p.addDiagnostic(start, "Unclosed CASE statement \u2014 expected END CASE");
+  }
   children.push(p.expect(TokenType.END));
   if (p.match(TokenType.CASE)) {
     children.push(p.tokens[p.pos - 1]);
@@ -487,6 +521,9 @@ function parseLoop(p: Parser): SyntaxNode {
   const start = p.advance(); // LOOP
   const children: (SyntaxNode | Token)[] = [start];
   children.push(parseStatementList(p));
+  if (p.isAtEnd()) {
+    p.addDiagnostic(start, "Unclosed LOOP \u2014 expected END LOOP");
+  }
   children.push(p.expect(TokenType.END));
   children.push(p.expect(TokenType.LOOP));
   // Optional label
@@ -500,6 +537,9 @@ function parseWhileLoop(p: Parser): SyntaxNode {
   children.push(parseExpression(p));
   children.push(p.expect(TokenType.LOOP));
   children.push(parseStatementList(p));
+  if (p.isAtEnd()) {
+    p.addDiagnostic(start, "Unclosed WHILE LOOP \u2014 expected END LOOP");
+  }
   children.push(p.expect(TokenType.END));
   children.push(p.expect(TokenType.LOOP));
   if (p.check(TokenType.Identifier)) children.push(p.advance());
@@ -513,35 +553,50 @@ function parseForLoop(p: Parser): SyntaxNode {
 
   children.push(p.expect(TokenType.IN));
 
-  // Could be cursor or range: expr..expr or SELECT
+  let isCursorFor = false;
+
+  // Could be cursor subquery, range, or cursor name
   if (p.check(TokenType.LeftParen)) {
-    // Cursor subquery
+    // Cursor subquery: FOR rec IN (SELECT ...)
+    isCursorFor = true;
     children.push(p.parseParenthesized(() => {
-      const { parseSelect } = require("./dml.js");
       return [parseSelect(p)];
     }));
   } else if (p.check(TokenType.REVERSE)) {
+    // REVERSE range: FOR i IN REVERSE 1..10
     children.push(p.advance());
     children.push(parseExpression(p));
     children.push(p.expect(TokenType.DoubleDot));
     children.push(parseExpression(p));
   } else {
-    // Range or cursor name
+    // Range or cursor name — parse first expression and check for ..
     const expr = parseExpression(p);
     children.push(expr);
     if (p.match(TokenType.DoubleDot)) {
+      // Numeric range: FOR i IN 1..10
       children.push(p.tokens[p.pos - 1]);
       children.push(parseExpression(p));
+    } else {
+      // Cursor name (possibly with parameters): FOR rec IN cursor_name[(args)]
+      isCursorFor = true;
+      if (p.check(TokenType.LeftParen)) {
+        children.push(p.parseParenthesized(() =>
+          p.parseCommaSeparated(() => parseExpression(p))
+        ));
+      }
     }
   }
 
   children.push(p.expect(TokenType.LOOP));
   children.push(parseStatementList(p));
+  if (p.isAtEnd()) {
+    p.addDiagnostic(start, "Unclosed FOR LOOP \u2014 expected END LOOP");
+  }
   children.push(p.expect(TokenType.END));
   children.push(p.expect(TokenType.LOOP));
   if (p.check(TokenType.Identifier)) children.push(p.advance());
 
-  return makeNode("ForLoopStatement", children, p.makeRange(start));
+  return makeNode(isCursorFor ? "CursorForLoop" : "ForRangeLoop", children, p.makeRange(start));
 }
 
 function parseForall(p: Parser): SyntaxNode {
@@ -592,7 +647,6 @@ function parseOpen(p: Parser): SyntaxNode {
   if (p.match(TokenType.FOR)) {
     children.push(p.tokens[p.pos - 1]);
     if (p.check(TokenType.SELECT) || p.check(TokenType.WITH)) {
-      const { parseSelect } = require("./dml.js");
       children.push(parseSelect(p));
     } else {
       // Dynamic SQL
@@ -775,6 +829,67 @@ function parseAssignmentOrCall(p: Parser): SyntaxNode {
 
   // Otherwise it's an expression statement (procedure call)
   return makeNode("ExpressionStatement", [target], p.makeRange(start));
+}
+
+// ─── Conditional Compilation ──────────────────────────────────────────────
+
+function parseConditionalCompilation(p: Parser): SyntaxNode {
+  const start = p.peek();
+  const children: (SyntaxNode | Token)[] = [];
+
+  if (p.check(TokenType.DOLLAR_ERROR)) {
+    // $ERROR 'message' $END
+    children.push(p.advance()); // $ERROR
+    // Consume until $END
+    while (!p.isAtEnd() && !p.check(TokenType.DOLLAR_END)) {
+      children.push(p.advance());
+    }
+    children.push(p.expect(TokenType.DOLLAR_END));
+    return makeNode("ConditionalCompilation", children, p.makeRange(start));
+  }
+
+  children.push(p.expect(TokenType.DOLLAR_IF)); // $IF
+  children.push(parseExpression(p)); // condition
+  children.push(p.expect(TokenType.DOLLAR_THEN)); // $THEN
+
+  // Body — consume tokens until $ELSIF, $ELSE, or $END
+  while (!p.isAtEnd() && !p.check(TokenType.DOLLAR_ELSIF) && !p.check(TokenType.DOLLAR_ELSE) && !p.check(TokenType.DOLLAR_END)) {
+    if (p.check(TokenType.Semicolon)) {
+      children.push(p.advance());
+      continue;
+    }
+    children.push(p.advance());
+  }
+
+  // $ELSIF branches
+  while (p.check(TokenType.DOLLAR_ELSIF)) {
+    children.push(p.advance()); // $ELSIF
+    children.push(parseExpression(p)); // condition
+    children.push(p.expect(TokenType.DOLLAR_THEN)); // $THEN
+    while (!p.isAtEnd() && !p.check(TokenType.DOLLAR_ELSIF) && !p.check(TokenType.DOLLAR_ELSE) && !p.check(TokenType.DOLLAR_END)) {
+      if (p.check(TokenType.Semicolon)) {
+        children.push(p.advance());
+        continue;
+      }
+      children.push(p.advance());
+    }
+  }
+
+  // $ELSE branch
+  if (p.check(TokenType.DOLLAR_ELSE)) {
+    children.push(p.advance()); // $ELSE
+    while (!p.isAtEnd() && !p.check(TokenType.DOLLAR_END)) {
+      if (p.check(TokenType.Semicolon)) {
+        children.push(p.advance());
+        continue;
+      }
+      children.push(p.advance());
+    }
+  }
+
+  children.push(p.expect(TokenType.DOLLAR_END)); // $END
+
+  return makeNode("ConditionalCompilation", children, p.makeRange(start));
 }
 
 // ─── Exception Section ────────────────────────────────────────────────────

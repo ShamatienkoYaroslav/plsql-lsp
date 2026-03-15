@@ -147,7 +147,10 @@ function parseQueryBlock(p: Parser): SyntaxNode {
     children.push(p.tokens[p.pos - 1]);
   }
 
-  // Hints: /*+ ... */ — already stripped as comments, skip
+  // Hints: /*+ ... */
+  if (p.check(TokenType.HintComment)) {
+    children.push(p.advance());
+  }
 
   // Select list
   children.push(parseSelectList(p));
@@ -158,9 +161,17 @@ function parseQueryBlock(p: Parser): SyntaxNode {
   }
 
   // FROM clause
+  let hasFrom = false;
   if (p.match(TokenType.FROM)) {
+    hasFrom = true;
     children.push(p.tokens[p.pos - 1]);
     children.push(parseTableRefList(p));
+  }
+
+  // Detect missing FROM when subsequent clauses suggest it was intended
+  if (!hasFrom && (p.check(TokenType.WHERE) || p.check(TokenType.GROUP) ||
+      p.check(TokenType.HAVING))) {
+    p.addDiagnostic(p.peek(), "Missing FROM clause before " + p.peek().text.toUpperCase());
   }
 
   // WHERE clause
@@ -294,8 +305,24 @@ function parseTablePrimary(p: Parser): SyntaxNode {
       children.push(lp, sub, rp);
     }
   } else if (p.check(TokenType.XMLTABLE) || p.check(TokenType.JSON_TABLE)) {
-    // Special table functions — consume as function call
-    children.push(parseExpression(p));
+    // Special table functions with complex syntax (PASSING, COLUMNS, PATH, etc.)
+    // Consume the keyword and then generically consume the parenthesized spec
+    children.push(p.advance()); // JSON_TABLE or XMLTABLE
+    if (p.check(TokenType.LeftParen)) {
+      children.push(p.parseParenthesized(() => {
+        const inner: (SyntaxNode | Token)[] = [];
+        let depth = 0;
+        while (!p.isAtEnd()) {
+          if (p.check(TokenType.LeftParen)) depth++;
+          if (p.check(TokenType.RightParen)) {
+            if (depth === 0) break;
+            depth--;
+          }
+          inner.push(p.advance());
+        }
+        return inner;
+      }));
+    }
   } else {
     // Regular table name: [schema.]table[@dblink]
     children.push(p.parseQualifiedName());
@@ -304,6 +331,30 @@ function parseTablePrimary(p: Parser): SyntaxNode {
     if (p.match(TokenType.AtSign)) {
       children.push(p.tokens[p.pos - 1]);
       children.push(p.parseIdentifier());
+    }
+
+    // Flashback: AS OF TIMESTAMP/SCN or VERSIONS BETWEEN
+    if (p.check(TokenType.AS) && p.peek(1).type === TokenType.OF) {
+      children.push(p.advance()); // AS
+      children.push(p.advance()); // OF
+      // TIMESTAMP or SCN
+      if (p.matchKeyword(TokenType.TIMESTAMP, TokenType.SCN)) {
+        children.push(p.tokens[p.pos - 1]);
+      }
+      children.push(parseExpression(p));
+    }
+    if (p.check(TokenType.VERSIONS)) {
+      children.push(p.advance()); // VERSIONS
+      children.push(p.expect(TokenType.BETWEEN));
+      // TIMESTAMP or SCN (optional qualifier)
+      if (p.matchKeyword(TokenType.TIMESTAMP, TokenType.SCN)) {
+        children.push(p.tokens[p.pos - 1]);
+      }
+      // Parse lower bound at precedence above AND (2) so AND is not consumed
+      // as part of a boolean expression inside the boundary expression.
+      children.push(parseExpression(p, 2));
+      children.push(p.expect(TokenType.AND));
+      children.push(parseExpression(p));
     }
   }
 
@@ -621,6 +672,11 @@ export function parseInsert(p: Parser): SyntaxNode {
   const start = p.advance(); // INSERT
   const children: (SyntaxNode | Token)[] = [start];
 
+  // Hints: /*+ ... */
+  if (p.check(TokenType.HintComment)) {
+    children.push(p.advance());
+  }
+
   // Multi-table insert: INSERT ALL/FIRST ... SELECT ...
   if (p.checkKeyword(TokenType.ALL, TokenType.FIRST)) {
     return parseMultiTableInsert(p, start, children);
@@ -716,7 +772,11 @@ export function parseUpdate(p: Parser): SyntaxNode {
   const start = p.advance(); // UPDATE
   const children: (SyntaxNode | Token)[] = [start];
 
-  // Optional hint
+  // Hints: /*+ ... */
+  if (p.check(TokenType.HintComment)) {
+    children.push(p.advance());
+  }
+
   children.push(p.parseQualifiedName());
 
   // Optional alias
@@ -776,6 +836,11 @@ export function parseDelete(p: Parser): SyntaxNode {
   const start = p.advance(); // DELETE
   const children: (SyntaxNode | Token)[] = [start];
 
+  // Hints: /*+ ... */
+  if (p.check(TokenType.HintComment)) {
+    children.push(p.advance());
+  }
+
   // Optional FROM
   p.match(TokenType.FROM);
 
@@ -804,6 +869,11 @@ export function parseDelete(p: Parser): SyntaxNode {
 export function parseMerge(p: Parser): SyntaxNode {
   const start = p.advance(); // MERGE
   const children: (SyntaxNode | Token)[] = [start];
+
+  // Hints: /*+ ... */
+  if (p.check(TokenType.HintComment)) {
+    children.push(p.advance());
+  }
 
   children.push(p.expect(TokenType.INTO));
   children.push(p.parseQualifiedName());

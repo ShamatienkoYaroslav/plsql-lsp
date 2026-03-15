@@ -75,15 +75,22 @@ export function lex(input: string): Token[] {
       continue;
     }
 
-    // Multi-line comment: /* ... */
+    // Multi-line comment: /* ... */ (or hint: /*+ ... */)
     if (c === "/" && ch(1) === "*") {
+      const isHint = ch(2) === "+";
       const start = pos;
       advance(2);
+      let text = "/*";
       while (pos < len && !(ch() === "*" && ch(1) === "/")) {
-        advance();
+        text += advance();
       }
-      if (pos < len) advance(2); // consume */
-      // skip comments
+      if (pos < len) {
+        text += advance(2); // consume */
+      }
+      if (isHint) {
+        emit(TokenType.HintComment, text, startOffset, startLine, startCol);
+      }
+      // Regular comments are skipped (not emitted)
       continue;
     }
 
@@ -265,6 +272,19 @@ export function lex(input: string): Token[] {
       }
 
       // Keyword lookup
+      const kw = KEYWORDS[upper];
+      emit(kw ?? TokenType.Identifier, text, startOffset, startLine, startCol);
+      continue;
+    }
+
+    // Conditional compilation directives: $IF, $THEN, etc.
+    if (c === "$" && ch(1) !== "$" && isLetter(ch(1))) {
+      let text = "$";
+      advance(); // skip $
+      while (pos < len && isIdentChar(ch())) {
+        text += advance();
+      }
+      const upper = text.toUpperCase();
       const kw = KEYWORDS[upper];
       emit(kw ?? TokenType.Identifier, text, startOffset, startLine, startCol);
       continue;

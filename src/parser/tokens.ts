@@ -744,6 +744,7 @@ export enum TokenType {
   HEADER = "HEADER",
   HEAP = "HEAP",
   HELP = "HELP",
+  HintComment = "HintComment",
   HEXTORAW = "HEXTORAW",
   HEXTOREF = "HEXTOREF",
   HIDDEN_KEYWORD = "HIDDEN_KEYWORD",

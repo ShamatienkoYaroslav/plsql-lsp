@@ -4,7 +4,7 @@ import { Diagnostic, DiagnosticSeverity } from "vscode-languageserver/node";
 import { parseExpression, parseExpressionList } from "./expressions.js";
 import { parseSelect, parseInsert, parseUpdate, parseDelete, parseMerge, parseLockTable, parseExplainPlan } from "./dml.js";
 import { parseCreate, parseAlter, parseDrop } from "./ddl.js";
-import { parseAnonymousBlock, parseProcedureBody, parseFunctionBody } from "./plsql.js";
+import { parseAnonymousBlock, parseProcedureBody, parseFunctionBody, parsePackageSpec, parsePackageBody, parseTriggerBody, parseTypeBody } from "./plsql.js";
 import { parseGrant, parseRevoke, parseComment, parseAnalyze, parseTransactionControl, parseMiscStatement } from "./misc.js";
 
 export class Parser {
@@ -81,16 +81,30 @@ export class Parser {
   // --- Error recovery ---
 
   synchronize(): void {
+    let depth = 0;
     while (!this.isAtEnd()) {
       const t = this.peek().type;
-      if (t === TokenType.Semicolon) {
+      if (t === TokenType.Semicolon && depth === 0) {
         this.advance();
         return;
       }
-      if (t === TokenType.END || t === TokenType.BEGIN || t === TokenType.DECLARE ||
+      if (t === TokenType.BEGIN) {
+        depth++;
+        this.advance();
+        continue;
+      }
+      if (t === TokenType.END) {
+        if (depth > 0) {
+          depth--;
+          this.advance();
+          continue;
+        }
+        return;
+      }
+      if (depth === 0 && (t === TokenType.DECLARE ||
           t === TokenType.CREATE || t === TokenType.ALTER || t === TokenType.DROP ||
           t === TokenType.SELECT || t === TokenType.INSERT || t === TokenType.UPDATE ||
-          t === TokenType.DELETE || t === TokenType.GRANT || t === TokenType.REVOKE) {
+          t === TokenType.DELETE || t === TokenType.GRANT || t === TokenType.REVOKE)) {
         return;
       }
       this.advance();
@@ -148,7 +162,8 @@ export class Parser {
     // Many keywords can be used as identifiers in Oracle
     // Accept any keyword token as an identifier (Oracle is very permissive)
     if (typeof tok.type === "string" && tok.type !== TokenType.EOF && tok.type !== TokenType.Error &&
-        tok.type !== TokenType.Semicolon && tok.type !== TokenType.LeftParen && tok.type !== TokenType.RightParen) {
+        tok.type !== TokenType.Semicolon && tok.type !== TokenType.LeftParen && tok.type !== TokenType.RightParen &&
+        tok.type !== TokenType.HintComment) {
       // It's a keyword being used as an identifier
       return this.advance();
     }
@@ -172,16 +187,24 @@ export class Parser {
     const start = this.peek();
     const children: (SyntaxNode | Token)[] = [];
 
-    // Handle common data types
-    const tok = this.peek();
+    // Handle common data types, including dotted names (schema.table.column)
     children.push(this.advance());
 
-    // Type arguments: (precision, scale) or (size)
+    // Dot-separated qualifiers: table.column, schema.table.column
+    while (this.check(TokenType.Dot)) {
+      children.push(this.advance()); // .
+      children.push(this.advance()); // next identifier
+    }
+
+    // Type arguments: (precision, scale) or (size CHAR/BYTE)
     if (this.check(TokenType.LeftParen)) {
-      children.push(this.parseParenthesized(() => this.parseCommaSeparated(() => {
-        // could be number, *, or identifier
-        return this.advance();
-      })));
+      children.push(this.parseParenthesized(() => {
+        const inner: (SyntaxNode | Token)[] = [];
+        while (!this.isAtEnd() && !this.check(TokenType.RightParen)) {
+          inner.push(this.advance());
+        }
+        return inner;
+      }));
     }
 
     // %TYPE or %ROWTYPE
@@ -299,6 +322,32 @@ export class Parser {
       case TokenType.EXECUTE:
         return parseMiscStatement(this);
 
+      case TokenType.PROCEDURE:
+        return parseProcedureBody(this, [this.advance()]);
+
+      case TokenType.FUNCTION:
+        return parseFunctionBody(this, [this.advance()]);
+
+      case TokenType.PACKAGE: {
+        const pkg = this.advance();
+        if (this.check(TokenType.BODY)) {
+          return parsePackageBody(this, [pkg, this.advance()]);
+        }
+        return parsePackageSpec(this, [pkg]);
+      }
+
+      case TokenType.TRIGGER:
+        return parseTriggerBody(this, [this.advance()]);
+
+      case TokenType.TYPE: {
+        const typ = this.advance();
+        if (this.check(TokenType.BODY)) {
+          return parseTypeBody(this, [typ, this.advance()]);
+        }
+        // bare TYPE declaration — fall through to unknown
+        return this.parseUnknownStatementWith([typ]);
+      }
+
       case TokenType.PromptMessage:
       case TokenType.StartCommand:
         // SQL*Plus commands — just consume
@@ -334,6 +383,22 @@ export class Parser {
       return makeErrorNode(`Unexpected token '${errTok.text}'`, [errTok], this.makeRange(start));
     }
 
+    return makeNode("UnknownStatement", children, this.makeRange(start));
+  }
+
+  parseUnknownStatementWith(initial: Token[]): SyntaxNode {
+    const start = initial[0];
+    const children: (SyntaxNode | Token)[] = [...initial];
+    while (!this.isAtEnd() && !this.check(TokenType.Semicolon)) {
+      const t = this.peek().type;
+      if (t === TokenType.CREATE || t === TokenType.ALTER || t === TokenType.DROP ||
+          t === TokenType.SELECT || t === TokenType.INSERT || t === TokenType.UPDATE ||
+          t === TokenType.DELETE || t === TokenType.BEGIN || t === TokenType.DECLARE ||
+          t === TokenType.GRANT || t === TokenType.REVOKE) {
+        break;
+      }
+      children.push(this.advance());
+    }
     return makeNode("UnknownStatement", children, this.makeRange(start));
   }
 }

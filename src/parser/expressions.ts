@@ -558,7 +558,14 @@ function parseInfixExpression(p: Parser, left: SyntaxNode, prec: number): Syntax
         if (p.check(TokenType.RightParen)) return [];
         return p.parseCommaSeparated(() => parseFunctionArg(p));
       });
-      return makeNode("FunctionCall", [left, paren], rangeFrom(p, left));
+      let call: SyntaxNode = makeNode("FunctionCall", [left, paren], rangeFrom(p, left));
+
+      // Analytic/window function: func(...) OVER (...)
+      if (p.check(TokenType.OVER)) {
+        call = parseWindowClause(p, call);
+      }
+
+      return call;
     }
   }
 
@@ -619,6 +626,81 @@ function isKeywordToken(type: TokenType): boolean {
     !type.startsWith("Left") &&
     !type.startsWith("Right") &&
     type !== "Error";
+}
+
+function parseWindowClause(p: Parser, funcCall: SyntaxNode): SyntaxNode {
+  const overKw = p.advance(); // OVER
+  const children: (SyntaxNode | Token)[] = [funcCall, overKw];
+
+  // OVER ( window_specification ) or OVER window_name
+  if (p.check(TokenType.LeftParen)) {
+    const paren = p.parseParenthesized(() => {
+      const inner: (SyntaxNode | Token)[] = [];
+
+      // PARTITION BY
+      if (p.check(TokenType.PARTITION)) {
+        inner.push(p.advance()); // PARTITION
+        inner.push(p.expect(TokenType.BY));
+        inner.push(parseExpressionList(p));
+      }
+
+      // ORDER BY
+      if (p.check(TokenType.ORDER)) {
+        inner.push(p.advance()); // ORDER
+        inner.push(p.expect(TokenType.BY));
+        inner.push(parseExpressionList(p));
+      }
+
+      // Windowing clause: ROWS | RANGE | GROUPS
+      if (p.checkKeyword(TokenType.ROWS, TokenType.RANGE, TokenType.GROUPS)) {
+        inner.push(p.advance()); // ROWS/RANGE/GROUPS
+        inner.push(...parseWindowFrame(p));
+      }
+
+      return inner;
+    });
+    children.push(paren);
+  } else {
+    // OVER window_name
+    children.push(p.advance());
+  }
+
+  return makeNode("WindowFunction", children, rangeFrom(p, funcCall));
+}
+
+function parseWindowFrame(p: Parser): (SyntaxNode | Token)[] {
+  const children: (SyntaxNode | Token)[] = [];
+
+  if (p.check(TokenType.BETWEEN)) {
+    // BETWEEN bound AND bound
+    children.push(p.advance()); // BETWEEN
+    children.push(...parseWindowBound(p));
+    children.push(p.expect(TokenType.AND));
+    children.push(...parseWindowBound(p));
+  } else {
+    // Single bound
+    children.push(...parseWindowBound(p));
+  }
+
+  return children;
+}
+
+function parseWindowBound(p: Parser): (SyntaxNode | Token)[] {
+  const children: (SyntaxNode | Token)[] = [];
+
+  if (p.check(TokenType.UNBOUNDED)) {
+    children.push(p.advance()); // UNBOUNDED
+    children.push(p.advance()); // PRECEDING or FOLLOWING
+  } else if (p.check(TokenType.CURRENT)) {
+    children.push(p.advance()); // CURRENT
+    children.push(p.advance()); // ROW
+  } else {
+    // expr PRECEDING/FOLLOWING
+    children.push(parseExpression(p, Prec.Comparison));
+    children.push(p.advance()); // PRECEDING or FOLLOWING
+  }
+
+  return children;
 }
 
 function rangeFrom(p: Parser, left: SyntaxNode) {

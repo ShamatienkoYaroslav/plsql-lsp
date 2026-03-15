@@ -513,10 +513,47 @@ function parseCreateType(p: Parser, children: (SyntaxNode | Token)[]): SyntaxNod
     if (p.check(TokenType.LeftParen)) {
       children.push(p.parseParenthesized(() =>
         p.parseCommaSeparated(() => {
-          // Member/static method or attribute
           const start = p.peek();
           const parts: (SyntaxNode | Token)[] = [];
-          while (!p.isAtEnd() && !p.check(TokenType.Comma) && !p.check(TokenType.RightParen)) {
+
+          // MEMBER/STATIC/CONSTRUCTOR FUNCTION/PROCEDURE — method member
+          if (p.checkKeyword(TokenType.MEMBER, TokenType.STATIC, TokenType.CONSTRUCTOR,
+                              TokenType.MAP, TokenType.ORDER)) {
+            // Consume qualifier keywords (MAP MEMBER, ORDER MEMBER, MEMBER, STATIC, CONSTRUCTOR)
+            while (p.checkKeyword(TokenType.MEMBER, TokenType.STATIC, TokenType.CONSTRUCTOR,
+                                   TokenType.MAP, TokenType.ORDER)) {
+              parts.push(p.advance());
+            }
+            // FUNCTION or PROCEDURE
+            const kind = p.check(TokenType.FUNCTION) ? "FunctionDecl" : "ProcedureDecl";
+            parts.push(p.advance()); // FUNCTION/PROCEDURE
+            parts.push(p.advance()); // name
+            // Parameters
+            if (p.check(TokenType.LeftParen)) {
+              parts.push(p.parseParenthesized(() => {
+                const inner: (SyntaxNode | Token)[] = [];
+                while (!p.isAtEnd() && !p.check(TokenType.RightParen)) {
+                  inner.push(p.advance());
+                }
+                return inner;
+              }));
+            }
+            // RETURN clause
+            while (!p.isAtEnd() && !p.check(TokenType.Comma) && !p.check(TokenType.RightParen)) {
+              parts.push(p.advance());
+            }
+            return makeNode(kind, parts, p.makeRange(start));
+          }
+
+          // Attribute member: name datatype (track paren depth for types like VARCHAR2(100))
+          let depth = 0;
+          while (!p.isAtEnd()) {
+            if (p.check(TokenType.LeftParen)) depth++;
+            if (p.check(TokenType.RightParen)) {
+              if (depth === 0) break;
+              depth--;
+            }
+            if (p.check(TokenType.Comma) && depth === 0) break;
             parts.push(p.advance());
           }
           return makeNode("TypeMember", parts, p.makeRange(start));

@@ -1,0 +1,133 @@
+# PL/SQL Language Server — TODO
+# Based on LSP.md phased rollout plan
+
+# ─── 1. Infrastructure ──────────────────────────────────────────────────────
+
+  1.1 [x] Technology choice: TypeScript with vscode-languageserver
+  1.2 [x] Wire up minimal LSP server (stdio transport, document sync)
+  1.3 [x] Document store (open/close, full sync via TextDocuments)
+  1.4 [x] Parse cache (per-document, invalidated on change)
+  1.5 [x] Build system (tsc, vitest)
+
+# ─── 2. Grammar / Parser ────────────────────────────────────────────────────
+
+  2.1  [x] Lexer (tokens for keywords, operators, literals, identifiers)
+  2.2  [x] Parser framework (token navigation, error recovery, synchronize)
+  2.3  [x] Anonymous blocks (DECLARE/BEGIN ... END)
+  2.4  [x] Named procedures / functions (standalone)
+  2.5  [x] Package spec + body
+  2.6  [x] Triggers (DML)
+  2.7  [x] Object types + type bodies
+  2.8  [x] Variable / constant / cursor / exception declarations
+  2.9  [x] IF / ELSIF / ELSE
+  2.10 [x] LOOP / WHILE / FOR loops
+  2.11 [x] CASE expression + statement
+  2.12 [x] Exception handlers (WHEN ... THEN)
+  2.13 [x] RETURN statement
+  2.14 [x] Assignment statements
+  2.15 [x] SELECT (basic, joins, subqueries, WITH/CTE)
+  2.16 [x] INSERT (single-table, multi-table)
+  2.17 [x] UPDATE
+  2.18 [x] DELETE
+  2.19 [x] MERGE
+  2.20 [x] CREATE TABLE (columns, constraints, table options)
+  2.21 [x] CREATE VIEW
+  2.22 [x] CREATE INDEX
+  2.23 [x] CREATE SEQUENCE
+  2.24 [x] CREATE SYNONYM
+  2.25 [x] CREATE TYPE (OBJECT, TABLE OF, VARRAY)
+  2.26 [x] CREATE DATABASE LINK / DIRECTORY
+  2.27 [x] ALTER TABLE (ADD, MODIFY, DROP, RENAME)
+  2.28 [x] DROP statements
+  2.29 [x] GRANT / REVOKE
+  2.30 [x] Transaction control (COMMIT, ROLLBACK, SAVEPOINT, SET)
+  2.31 [x] COMMENT ON
+  2.32 [x] ANALYZE
+  2.33 [x] LOCK TABLE
+  2.34 [x] EXPLAIN PLAN
+  2.35 [x] TRUNCATE / RENAME / PURGE / FLASHBACK / AUDIT
+  2.36 [x] Expression parsing (binary ops, unary, function calls, CASE, IN, BETWEEN, LIKE, IS NULL)
+  2.37 [x] Qualified names (schema.object)
+  2.38 [x] Data type parsing (with %TYPE, %ROWTYPE)
+  2.39 [x] SQL*Plus commands (PROMPT, START/@)
+  2.40 [x] Cursor FOR loops (implicit cursor variable scoping)
+  2.41 [x] Bulk collect / FORALL
+  2.42 [x] Dynamic SQL (EXECUTE IMMEDIATE, DBMS_SQL)
+  2.43 [x] PRAGMA (AUTONOMOUS_TRANSACTION, EXCEPTION_INIT, etc.)
+  2.44 [x] Collections (nested tables, varrays, associative arrays — type usage)
+  2.45 [x] Pipelined / aggregate functions
+  2.46 [x] Conditional compilation ($IF, $THEN, $END)
+  2.47 [x] CONNECT BY / START WITH (hierarchical queries)
+  2.48 [x] MODEL clause
+  2.49 [x] PIVOT / UNPIVOT
+  2.50 [x] Flashback queries (AS OF TIMESTAMP)
+  2.51 [x] Analytic functions with OVER clause (window specs)
+  2.52 [x] JSON_TABLE / XMLTABLE
+  2.53 [x] Hints (/*+ ... */)
+  2.54 [x] Edition-based redefinition
+  2.55 [x] Compound triggers (BEFORE/AFTER EACH ROW sections)
+  2.56 [x] DDL triggers, INSTEAD OF triggers
+
+# ─── 3. Phase 1: Parse + Diagnostics ────────────────────────────────────────
+
+  3.1  [x] textDocument/publishDiagnostics — syntax errors from parser
+  3.2  [x] textDocument/documentSymbol — outline (procedures, functions, packages, triggers, types, tables, views, indexes, sequences, synonyms, variables, cursors, exceptions)
+  3.3  [x] textDocument/foldingRange — fold BEGIN/END, IF, LOOP, CASE blocks
+  3.4  [x] textDocument/formatting — reformat SQL/PL/SQL
+  3.5  [x] Tests: lexer tests
+  3.6  [x] Tests: parser tests
+  3.7  [x] Tests: diagnostics tests
+  3.8  [X] Tests: symbol tests
+  3.9  [X] Tests: folding tests
+  3.10 [x] Tests: formatting tests
+  3.11 [x] Error recovery improvements (incomplete SELECT, unclosed BEGIN, missing semicolons)
+
+# ─── 4. Phase 2: Local Intelligence (single-file, no DB) ────────────────────
+
+  4.1  [x] Scope-aware symbol table from AST
+  4.2  [ ] Resolve references within a single compilation unit
+  4.3  [ ] textDocument/completion — keywords, local variables, parameters, cursor columns
+  4.4  [ ] textDocument/hover — variable type, parameter mode (IN/OUT), cursor SQL
+  4.5  [ ] textDocument/definition — go to local variable/cursor declaration
+  4.6  [ ] textDocument/references — find all references to a variable/parameter
+  4.7  [ ] textDocument/rename — rename local variables safely
+  4.8  [ ] textDocument/signatureHelp — parameter hints for local procedures/functions
+  4.9  [ ] Type inference for %TYPE, %ROWTYPE, cursor FOR loop variables
+  4.10 [ ] Keyword + snippet completion provider
+  4.11 [ ] Diagnostics: unused variables (hint)
+
+# ─── 5. Phase 3: Catalog-Aware Intelligence (DB connection) ─────────────────
+
+  5.1  [ ] Catalog provider (connect to Oracle via SQLcl or JDBC thin)
+  5.2  [ ] Cache: user_tables, user_tab_columns, user_objects, user_arguments, user_source
+  5.3  [ ] LSP custom notification: oradev/setConnection
+  5.4  [ ] textDocument/completion — table names, column names, package members, built-in functions
+  5.5  [ ] textDocument/hover — column types, table comments, package procedure signatures
+  5.6  [ ] textDocument/definition — jump to package spec/body source (from user_source)
+  5.7  [ ] textDocument/diagnostics — "table X does not exist", "column Y not in table Z"
+  5.8  [ ] textDocument/codeAction — "create missing procedure", "add missing column"
+  5.9  [ ] Cross-reference SQL table/column refs against catalog
+  5.10 [ ] Resolve schema.package.procedure chains
+  5.11 [ ] Catalog invalidation strategy (manual refresh, file-save trigger)
+  5.12 [ ] oradev.json project configuration support
+
+# ─── 6. Phase 4: Advanced Features ──────────────────────────────────────────
+
+  6.1 [ ] textDocument/semanticTokens — tables, columns, types get distinct tokens
+  6.2 [ ] callHierarchy/incomingCalls + outgoingCalls
+  6.3 [ ] typeHierarchy (object type inheritance)
+  6.4 [ ] textDocument/codeLens — "N references", "Run", "Explain plan"
+  6.5 [ ] workspace/executeCommand — run statement, show explain plan, compile package
+  6.6 [ ] Multi-root workspace (multiple schemas, multiple DB connections)
+
+# ─── 7. Configuration ───────────────────────────────────────────────────────
+
+  7.1 [ ] Read oradev.json from project root
+  7.2 [ ] formatting.keywordCase (upper | lower | preserve)
+  7.3 [ ] formatting.indentWidth
+  7.4 [ ] formatting.commaStyle (trailing | leading)
+  7.5 [ ] diagnostics.unknownTable severity
+  7.6 [ ] diagnostics.unknownColumn severity
+  7.7 [ ] diagnostics.unusedVariable severity
+  7.8 [ ] defaultConnection setting
+  7.9 [ ] sqlclPath setting
