@@ -85,49 +85,52 @@
 # ─── 4. Phase 2: Local Intelligence (single-file, no DB) ────────────────────
 
   4.1  [x] Scope-aware symbol table from AST
-  4.2  [ ] Resolve references within a single compilation unit
-  4.3  [ ] textDocument/completion — keywords, local variables, parameters, cursor columns
-  4.4  [ ] textDocument/hover — variable type, parameter mode (IN/OUT), cursor SQL
-  4.5  [ ] textDocument/definition — go to local variable/cursor declaration
-  4.6  [ ] textDocument/references — find all references to a variable/parameter
-  4.7  [ ] textDocument/rename — rename local variables safely
-  4.8  [ ] textDocument/signatureHelp — parameter hints for local procedures/functions
-  4.9  [ ] Type inference for %TYPE, %ROWTYPE, cursor FOR loop variables
-  4.10 [ ] Keyword + snippet completion provider
-  4.11 [ ] Diagnostics: unused variables (hint)
+  4.2  [x] Resolve references within a single compilation unit
+  4.3  [x] textDocument/completion — keywords, local variables, parameters, cursor columns
+  4.4  [x] textDocument/hover — variable type, parameter mode (IN/OUT), cursor SQL
+  4.5  [x] textDocument/definition — go to local variable/cursor declaration
+  4.6  [x] textDocument/references — find all references to a variable/parameter
+  4.7  [x] textDocument/rename — rename local variables safely
+  4.8  [x] textDocument/signatureHelp — parameter hints for local procedures/functions
+  4.9  [x] Type inference for %TYPE, %ROWTYPE, cursor FOR loop variables
+  4.10 [x] Keyword + snippet completion provider
+  4.11 [x] Diagnostics: unused variables (hint)
 
 # ─── 5. Phase 3: Catalog-Aware Intelligence (DB connection) ─────────────────
 
-  5.1  [ ] Catalog provider (connect to Oracle via SQLcl or JDBC thin)
-  5.2  [ ] Cache: user_tables, user_tab_columns, user_objects, user_arguments, user_source
-  5.3  [ ] LSP custom notification: oradev/setConnection
-  5.4  [ ] textDocument/completion — table names, column names, package members, built-in functions
-  5.5  [ ] textDocument/hover — column types, table comments, package procedure signatures
-  5.6  [ ] textDocument/definition — jump to package spec/body source (from user_source)
-  5.7  [ ] textDocument/diagnostics — "table X does not exist", "column Y not in table Z"
-  5.8  [ ] textDocument/codeAction — "create missing procedure", "add missing column"
-  5.9  [ ] Cross-reference SQL table/column refs against catalog
-  5.10 [ ] Resolve schema.package.procedure chains
-  5.11 [ ] Catalog invalidation strategy (manual refresh, file-save trigger)
-  5.12 [ ] oradev.json project configuration support
+  5.1  [x] Catalog provider (connect to Oracle via SQLcl or JDBC thin)
+  5.2  [x] Cache: user_tables, user_tab_columns, user_objects, user_arguments, user_source
+  5.3  [x] LSP custom notification: oradev/setConnection
+  5.4  [x] textDocument/completion — table names, column names, package members, built-in functions
+  5.5  [x] textDocument/hover — column types, table comments, package procedure signatures
+  5.6  [x] textDocument/definition — jump to package spec/body source (from user_source)
+  5.7  [x] textDocument/diagnostics — "table X does not exist", "column Y not in table Z"
+  5.8  [x] textDocument/codeAction — "create missing procedure", "add missing column"
+  5.9  [x] Cross-reference SQL table/column refs against catalog
+  5.10 [x] Resolve schema.package.procedure chains
+  5.11 [x] Catalog invalidation strategy (manual refresh, file-save trigger)
+  5.12 [x] .dbtools/project.config.json project configuration support
 
 # ─── 6. Phase 4: Advanced Features ──────────────────────────────────────────
 
-  6.1 [ ] textDocument/semanticTokens — tables, columns, types get distinct tokens
-  6.2 [ ] callHierarchy/incomingCalls + outgoingCalls
-  6.3 [ ] typeHierarchy (object type inheritance)
-  6.4 [ ] textDocument/codeLens — "N references", "Run", "Explain plan"
-  6.5 [ ] workspace/executeCommand — run statement, show explain plan, compile package
-  6.6 [ ] Multi-root workspace (multiple schemas, multiple DB connections)
+  6.1 [x] textDocument/semanticTokens — tables, columns, types get distinct tokens
+  6.2 [x] callHierarchy/incomingCalls + outgoingCalls
+  6.3 [x] typeHierarchy (object type inheritance)
+  6.4 [x] textDocument/codeLens — "N references", "Run", "Explain plan"
+  6.5 [x] workspace/executeCommand — run statement, show explain plan, compile package
+  6.6 [x] Multi-root workspace (multiple schemas, multiple DB connections)
 
 # ─── 7. Configuration ───────────────────────────────────────────────────────
 
-  7.1 [ ] Read oradev.json from project root
-  7.2 [ ] formatting.keywordCase (upper | lower | preserve)
-  7.3 [ ] formatting.indentWidth
-  7.4 [ ] formatting.commaStyle (trailing | leading)
-  7.5 [ ] diagnostics.unknownTable severity
-  7.6 [ ] diagnostics.unknownColumn severity
-  7.7 [ ] diagnostics.unusedVariable severity
-  7.8 [ ] defaultConnection setting
-  7.9 [ ] sqlclPath setting
+  7.1 [x] Read .dbtools/project.config.json from project root
+  7.2 [x] Read .dbtools/project.sqlformat.xml (SQLcl formatting rules)
+  7.3 [x] formatting.kwCase / idCase from sqlformat.xml
+  7.4 [x] formatting.identSpaces / useTab from sqlformat.xml
+  7.5 [x] formatting.breaksComma / spaceAfterCommas from sqlformat.xml
+  7.6 [x] formatting.alignments (tabColAliases, assignments, typeDecl, namedArgs)
+  7.7 [x] diagnostics.unknownTable severity
+  7.8 [x] diagnostics.unknownColumn severity
+  7.9 [x] diagnostics.unusedVariable severity
+  7.10 [x] defaultConnection from project.config.json (sqlcl.connectionName)
+  7.11 [x] schemas from project.config.json
+  7.12 [x] Per-workspace formatting options resolved in onDocumentFormatting

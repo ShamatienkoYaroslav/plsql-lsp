@@ -27,7 +27,7 @@ Not yet finalized. Candidates: Rust (tower-lsp + tree-sitter) or TypeScript (vsc
 
 ## Configuration
 
-Project settings in `oradev.json` at project root. No credentials stored — connections provided by editor plugin via LSP custom notifications.
+Project settings in `.dbtools/project.config.json` at project root. Formatting rules in `.dbtools/project.sqlformat.xml` (SQLcl format). No credentials stored — connections provided by editor plugin via LSP custom notifications.
 
 ## TypeScript
 

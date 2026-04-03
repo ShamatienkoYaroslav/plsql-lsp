@@ -198,26 +198,23 @@ Tree-sitter has built-in error recovery. ANTLR needs custom error strategies.
 
 ## 5. Configuration / Settings
 
-Project-level settings live in `oradev.json` at the project root. This file contains **only** LSP behavior settings — **no connection information**. Connections are sourced from:
+Project-level settings live in `.dbtools/project.config.json` at the project root. This file contains **only** LSP behavior settings — **no connection information**. Connections are sourced from:
 
 1. **Editor** — the active connection passed by the editor/plugin (e.g., oradev.nvim's current worksheet connection)
 
 ```jsonc
-// oradev.json (project root)
+// .dbtools/project.config.json
 {
-  "formatting": {
-    "keywordCase": "upper", // upper | lower | preserve
-    "indentWidth": 2,
-    "commaStyle": "trailing", // trailing | leading
-  },
+  "defaultConnection": "dev-db", // name from ~/.dbtools, used when no editor connection is active
+  "sqlclPath": "sql", // path to sqlcl binary
   "diagnostics": {
     "unknownTable": "warning",
     "unknownColumn": "warning",
-    "unusedVariable": "hint",
-  },
-  "defaultConnection": "dev-db", // name from ~/.dbtools, used when no editor connection is active
-  "sqlclPath": "sql", // path to sqlcl binary
+    "unusedVariable": "hint"
+  }
 }
+// Formatting rules in .dbtools/project.sqlformat.xml (SQLcl format)
+```
 ```
 
 The LSP server discovers connections by:

@@ -4,7 +4,7 @@ A language server implementing the [Language Server Protocol](https://microsoft.
 
 ## Status
 
-Early stage — Phase 1 (parse + diagnostics) is in progress.
+All four phases complete — parse + diagnostics, local intelligence, catalog-aware intelligence, and advanced features. Configuration via `.dbtools/` project files fully supported.
 
 ## Features
 
@@ -15,6 +15,30 @@ Early stage — Phase 1 (parse + diagnostics) is in progress.
 - PL/SQL blocks: DECLARE/BEGIN/END, IF, LOOP, FOR, WHILE, CASE, CURSOR, EXCEPTION
 - Transaction control: COMMIT, ROLLBACK, SAVEPOINT
 - Error recovery — parser continues after syntax errors
+- Code completion — PL/SQL keywords, local variables, parameters, cursors, exceptions (scope-aware)
+- Hover information — variable types, parameter modes, cursor SQL, procedure/function signatures
+- Go to definition — jump to local variable, parameter, cursor, or procedure declaration
+- Find references — find all usages of a variable, parameter, cursor, or procedure
+- Rename — safely rename local variables, parameters, cursors across all references
+- Signature help — parameter hints when calling local procedures/functions
+- Unused variable hints — greyed-out diagnostics for declared but unused variables/parameters
+- Database connection via SQLcl MCP — connect to Oracle using saved SQLcl connection names
+- Catalog-aware completion — table names, column names (after dot), package members, sequences, views
+- Catalog-aware hover — table column listings, column types, package procedure signatures with arguments
+- Catalog diagnostics — "table X does not exist", "column Y not in table Z" warnings
+- Semantic tokens — syntax-aware highlighting for variables, parameters, functions, procedures, types, cursors, exceptions, labels
+- Call hierarchy — incoming and outgoing calls for procedures/functions
+- Type hierarchy — supertypes and subtypes for object type inheritance (UNDER)
+- Code lens — "N references" and "Run" actions on procedures/functions
+- Execute command — run statement, explain plan, compile package via LSP commands
+- Multi-root workspace — multiple workspace folders with independent DB connections
+- Code actions — quick fixes to generate ALTER TABLE or CREATE TABLE for missing objects
+- Schema-qualified name resolution — supports schema.table.column and schema.package.procedure chains
+- Auto-refresh catalog on file save when DDL is detected
+- Project configuration via `.dbtools/project.config.json` — default connection name, schemas
+- SQLcl formatting rules via `.dbtools/project.sqlformat.xml` — keyword case, identifier case, indentation, comma breaks, alignments
+- Configurable diagnostic severity — unknownTable, unknownColumn, unusedVariable (error/warning/info/hint/off)
+- Per-workspace configuration — each workspace folder resolves its own config and formatting rules
 
 ## Getting Started
 
@@ -59,22 +83,42 @@ npm run test:watch
 
 ```
 src/
-  server.ts          LSP server entry point (JSON-RPC over stdio)
+  server.ts              LSP server entry point (JSON-RPC over stdio)
+  config.ts              .dbtools/project.config.json configuration loader
+  symbolTable.ts         Scope-aware symbol table, reference resolution
+  completion.ts          Code completion (keywords, locals, catalog)
+  hover.ts               Hover information
+  definition.ts          Go to definition
+  references.ts          Find all references
+  rename.ts              Rename symbol
+  signatureHelp.ts       Signature help (parameter hints)
+  unusedDiagnostics.ts   Unused variable diagnostics
+  catalogProvider.ts     Oracle catalog provider via SQLcl MCP
+  catalogTypes.ts        Catalog data interfaces
+  catalogDiagnostics.ts  Table/column validation against catalog
+  semanticTokens.ts     Semantic token provider (syntax-aware highlighting)
+  callHierarchy.ts       Incoming/outgoing call hierarchy
+  typeHierarchy.ts       Type hierarchy (object type inheritance)
+  codeLens.ts            Code lens (reference counts, run actions)
+  executeCommand.ts      Workspace command execution
+  workspaceManager.ts    Multi-root workspace folder management
+  codeActions.ts         Quick fix code actions
+  symbols.ts             Document symbols (outline)
+  folding.ts             Folding ranges
+  formatting.ts          Document formatting
   parser/
-    index.ts         parseDocument() — main entry point
-    lexer.ts         Hand-written lexer
-    tokens.ts        Token types and keyword table
-    parser.ts        Parser base class (token navigation, diagnostics, error recovery)
-    expressions.ts   Expression parsing
-    dml.ts           SELECT, INSERT, UPDATE, DELETE, MERGE
-    ddl.ts           CREATE, ALTER, DROP
-    plsql.ts         PL/SQL blocks, control flow
-    misc.ts          GRANT, REVOKE, COMMENT, transaction control
-    ast.ts           AST node types
+    index.ts             parseDocument() — main entry point
+    lexer.ts             Hand-written lexer
+    tokens.ts            Token types and keyword table
+    parser.ts            Parser base class (token navigation, diagnostics, error recovery)
+    expressions.ts       Expression parsing
+    dml.ts               SELECT, INSERT, UPDATE, DELETE, MERGE
+    ddl.ts               CREATE, ALTER, DROP
+    plsql.ts             PL/SQL blocks, control flow
+    misc.ts              GRANT, REVOKE, COMMENT, transaction control
+    ast.ts               AST node types
 tests/
-  lexer.test.ts      Lexer unit tests
-  parser.test.ts     Parser tests (parse-without-errors)
-  diagnostics.test.ts  End-to-end diagnostics tests
+  *.test.ts              27 test files, 1016 tests
 ```
 
 ## Neovim Setup
@@ -92,7 +136,7 @@ if not configs.plsql_lsp then
     default_config = {
       cmd = { "node", "/absolute/path/to/plsql-lsp/dist/server.js", "--stdio" },
       filetypes = { "plsql", "sql" },
-      root_dir = lspconfig.util.root_pattern("oradev.json", ".git"),
+      root_dir = lspconfig.util.root_pattern(".dbtools", ".git"),
       settings = {},
     },
   }
@@ -114,7 +158,7 @@ vim.api.nvim_create_autocmd("FileType", {
     vim.lsp.start({
       name = "plsql-lsp",
       cmd = { "node", "/absolute/path/to/plsql-lsp/dist/server.js", "--stdio" },
-      root_dir = vim.fs.dirname(vim.fs.find({ "oradev.json", ".git" }, { upward = true })[1]),
+      root_dir = vim.fs.dirname(vim.fs.find({ ".dbtools", ".git" }, { upward = true })[1]),
     })
   end,
 })
@@ -219,7 +263,7 @@ function M.start(bufnr)
     name = "plsql-lsp",
     cmd = { "node", config.server_path, "--stdio" },
     root_dir = vim.fs.dirname(
-      vim.fs.find({ "oradev.json", ".git" }, { upward = true, path = vim.api.nvim_buf_get_name(bufnr) })[1]
+      vim.fs.find({ ".dbtools", ".git" }, { upward = true, path = vim.api.nvim_buf_get_name(bufnr) })[1]
     ),
   }, { bufnr = bufnr })
 end
@@ -370,7 +414,60 @@ vim.api.nvim_create_autocmd("LspAttach", {
 
 ## Configuration
 
-Project settings go in `oradev.json` at the project root. Database connections are provided by the editor plugin via LSP custom notifications — no credentials are stored in config files.
+Project settings live in the `.dbtools/` directory at the project root. Database connections are provided by the editor plugin via LSP custom notifications — no credentials are stored in config files.
+
+### `.dbtools/project.config.json`
+
+The LSP reads the default connection name and schema list from this file (standard SQLcl/dbtools project config):
+
+```json
+{
+  "project": "my_project",
+  "sqlcl": {
+    "connectionName": "my_project_dev",
+    "autoConnect": false
+  },
+  "schemas": ["MY_SCHEMA"]
+}
+```
+
+The server uses `sqlcl.connectionName` to auto-connect on startup, and `schemas` to scope catalog queries.
+
+### `.dbtools/project.sqlformat.xml`
+
+SQL formatting rules follow the SQLcl format. The LSP reads this file and applies the rules when formatting documents:
+
+```xml
+<options>
+    <kwCase>oracle.dbtools.app.Format.Case.lower</kwCase>
+    <idCase>oracle.dbtools.app.Format.Case.lower</idCase>
+    <identSpaces>4</identSpaces>
+    <useTab>false</useTab>
+    <maxCharLineSize>128</maxCharLineSize>
+    <breaksComma>oracle.dbtools.app.Format.Breaks.After</breaksComma>
+    <spaceAfterCommas>true</spaceAfterCommas>
+    <breaksAfterSelect>true</breaksAfterSelect>
+    <alignTabColAliases>true</alignTabColAliases>
+    <alignAssignments>false</alignAssignments>
+    <alignTypeDecl>true</alignTypeDecl>
+    <alignNamedArgs>true</alignNamedArgs>
+    <spaceAroundOperators>true</spaceAroundOperators>
+</options>
+```
+
+Supported `kwCase`/`idCase` values: `upper`, `lower`, `INIT_CAP` (treated as preserve). Quoted identifiers are never modified.
+
+### Diagnostic severity
+
+Diagnostic severity is configurable per workspace via LSP settings:
+
+| Setting | Controls | Default |
+|---------|----------|---------|
+| `diagnostics.unknownTableSeverity` | "table X does not exist" | `warning` |
+| `diagnostics.unknownColumnSeverity` | "column Y not in table Z" | `warning` |
+| `diagnostics.unusedVariableSeverity` | unused variable/parameter hints | `hint` |
+
+Values: `error`, `warning`, `info`, `hint`, `off` (disables the diagnostic).
 
 ## License
 

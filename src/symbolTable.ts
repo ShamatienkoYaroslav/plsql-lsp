@@ -23,6 +23,7 @@ export interface SymbolInfo {
   normalizedName: string;
   symbolType: SymbolType;
   dataType?: string;
+  inferredType?: string;
   parameterMode?: string;
   range: Range;
   nameRange: Range;
@@ -42,6 +43,17 @@ export interface SymbolTable {
   globalScope: Scope;
   allSymbols: SymbolInfo[];
   allScopes: Scope[];
+}
+
+export interface Reference {
+  token: Token;
+  range: Range;
+  resolvedSymbol: SymbolInfo;
+}
+
+export interface ReferenceResult {
+  references: Reference[];
+  symbolReferences: Map<SymbolInfo, Reference[]>;
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -192,7 +204,9 @@ export function buildSymbolTable(ast: SyntaxNode): SymbolTable {
 
   walkNode(ast, globalScope, allSymbols, allScopes);
 
-  return { globalScope, allSymbols, allScopes };
+  const table: SymbolTable = { globalScope, allSymbols, allScopes };
+  inferTypes(table);
+  return table;
 }
 
 function walkNode(
@@ -462,10 +476,45 @@ function processForLoop(
   allScopes.push(loopScope);
 
   // The loop variable is the second child (index 1) — a token after FOR
+  let loopVarSym: SymbolInfo | undefined;
   if (node.children.length > 1) {
     const varChild = node.children[1];
     if (isToken(varChild) && (varChild.type === TokenType.Identifier || varChild.type === TokenType.QuotedIdentifier)) {
-      addSymbol(allSymbols, loopScope, varChild, SymbolType.ForLoopVariable, node.range);
+      loopVarSym = addSymbol(allSymbols, loopScope, varChild, SymbolType.ForLoopVariable, node.range);
+    }
+  }
+
+  // For CursorForLoop, determine the loop variable's dataType from the cursor reference
+  if (node.kind === "CursorForLoop" && loopVarSym) {
+    let afterIn = false;
+    for (const child of node.children) {
+      if (isToken(child) && child.type === TokenType.IN) {
+        afterIn = true;
+        continue;
+      }
+      if (afterIn) {
+        if (!isToken(child) && child.kind === "Parenthesized") {
+          // Inline SELECT: FOR rec IN (SELECT ...) LOOP
+          loopVarSym.dataType = "RECORD";
+        } else if (!isToken(child) && child.kind === "Identifier") {
+          // Simple cursor name: FOR rec IN cursor_name LOOP
+          // The Identifier node wraps a single token
+          const innerToken = child.children[0];
+          if (isToken(innerToken)) {
+            loopVarSym.dataType = innerToken.text + "%ROWTYPE";
+          }
+        } else if (!isToken(child) && child.kind === "DotAccess") {
+          // Schema-qualified cursor: FOR rec IN schema.cursor_name LOOP
+          const tokens: string[] = [];
+          for (const dc of child.children) {
+            if (isToken(dc)) tokens.push(dc.text);
+          }
+          if (tokens.length > 0) {
+            loopVarSym.dataType = tokens.join("") + "%ROWTYPE";
+          }
+        }
+        break;
+      }
     }
   }
 
@@ -644,6 +693,86 @@ function processParameter(
   addSymbol(allSymbols, scope, nameChild, SymbolType.Parameter, node.range, dataType, mode);
 }
 
+// ─── Type Inference ────────────────────────────────────────────────────────
+
+/** Post-processing pass: resolve %TYPE and %ROWTYPE references to inferred types. */
+function inferTypes(table: SymbolTable): void {
+  for (const sym of table.allSymbols) {
+    if (!sym.dataType) continue;
+    const upper = sym.dataType.toUpperCase();
+
+    if (/% *ROWTYPE\b/.test(upper)) {
+      resolvePercentRowtype(sym);
+    } else if (/% *TYPE\b/.test(upper)) {
+      resolvePercentType(sym);
+    }
+  }
+}
+
+function resolvePercentType(sym: SymbolInfo): void {
+  const match = sym.dataType!.match(/^(.+)\s*%\s*TYPE$/i);
+  if (!match) return;
+  const base = match[1].trim();
+
+  // Only resolve simple names (no dots = local variable reference)
+  if (base.includes(".")) return;
+
+  const normalized = base.toUpperCase();
+  // Walk scope chain to find the referenced symbol
+  let current: Scope | null = sym.scope;
+  while (current) {
+    const target = current.symbols.get(normalized);
+    if (target && target.dataType && target !== sym) {
+      // Follow %TYPE chains (max depth 10 to avoid cycles)
+      let resolved = target;
+      let depth = 0;
+      while (resolved.dataType && /% *TYPE\b/i.test(resolved.dataType) && depth < 10) {
+        const innerMatch = resolved.dataType.match(/^(.+)\s*%\s*TYPE$/i);
+        if (!innerMatch) break;
+        const innerBase = innerMatch[1].trim();
+        if (innerBase.includes(".")) break;
+        const innerNorm = innerBase.toUpperCase();
+        let found: SymbolInfo | undefined;
+        let s: Scope | null = resolved.scope;
+        while (s) {
+          found = s.symbols.get(innerNorm);
+          if (found && found !== resolved) break;
+          found = undefined;
+          s = s.parent;
+        }
+        if (!found || !found.dataType) break;
+        resolved = found;
+        depth++;
+      }
+      if (!resolved.dataType || !/% *TYPE\b/i.test(resolved.dataType)) {
+        sym.inferredType = resolved.dataType;
+      }
+      return;
+    }
+    current = current.parent;
+  }
+}
+
+function resolvePercentRowtype(sym: SymbolInfo): void {
+  const match = sym.dataType!.match(/^(.+)\s*%\s*ROWTYPE$/i);
+  if (!match) return;
+  const base = match[1].trim();
+
+  // Table references (with dots) can't be resolved without DB
+  if (base.includes(".")) return;
+
+  const normalized = base.toUpperCase();
+  let current: Scope | null = sym.scope;
+  while (current) {
+    const target = current.symbols.get(normalized);
+    if (target && target.symbolType === SymbolType.Cursor) {
+      sym.inferredType = `RECORD (cursor: ${target.name})`;
+      return;
+    }
+    current = current.parent;
+  }
+}
+
 // ─── Lookup functions ──────────────────────────────────────────────────────
 
 /** Find the innermost scope that contains the given position. */
@@ -675,6 +804,71 @@ export function resolveSymbol(
 }
 
 function lookupInScopeChain(scope: Scope, normalizedName: string): SymbolInfo | undefined {
+  let current: Scope | null = scope;
+  while (current !== null) {
+    const sym = current.symbols.get(normalizedName);
+    if (sym) return sym;
+    current = current.parent;
+  }
+  return undefined;
+}
+
+// ─── Reference Resolution ──────────────────────────────────────────────────
+
+export function resolveReferences(ast: SyntaxNode, table: SymbolTable): ReferenceResult {
+  const references: Reference[] = [];
+  const symbolReferences = new Map<SymbolInfo, Reference[]>();
+
+  // Collect declaration offsets to skip
+  const declOffsets = new Set<number>();
+  for (const sym of table.allSymbols) {
+    declOffsets.add(sym.nameRange.start.offset);
+  }
+
+  function visit(node: SyntaxNode | Token): void {
+    if (isToken(node)) {
+      if (node.type !== TokenType.Identifier && node.type !== TokenType.QuotedIdentifier) return;
+      if (declOffsets.has(node.offset)) return;
+
+      const resolved = resolveTokenReference(table, node);
+      if (!resolved) return;
+
+      const ref: Reference = {
+        token: node,
+        range: tokenRange(node),
+        resolvedSymbol: resolved,
+      };
+      references.push(ref);
+
+      let refs = symbolReferences.get(resolved);
+      if (!refs) {
+        refs = [];
+        symbolReferences.set(resolved, refs);
+      }
+      refs.push(ref);
+      return;
+    }
+
+    for (const child of node.children) {
+      visit(child);
+    }
+  }
+
+  visit(ast);
+  return { references, symbolReferences };
+}
+
+function resolveTokenReference(table: SymbolTable, token: Token): SymbolInfo | undefined {
+  const position: Position = { offset: token.offset, line: token.line, col: token.col };
+  const scope = findScopeAtPosition(table, position);
+
+  let normalizedName: string;
+  if (token.type === TokenType.QuotedIdentifier) {
+    normalizedName = token.text.slice(1, -1);
+  } else {
+    normalizedName = token.text.toUpperCase();
+  }
+
   let current: Scope | null = scope;
   while (current !== null) {
     const sym = current.symbols.get(normalizedName);
